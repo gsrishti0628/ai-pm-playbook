@@ -13,7 +13,7 @@ A running record of patterns, failure modes, and frameworks I've found useful wh
 
 ## The problem that started this
 
-We were deploying a multi-agent AI system for an enterprise HR use case. The individual agents performed well in isolation. Once we wired them together under an orchestrator, things got unpredictable. The orchestrator would forget decisions made by upstream agents mid-workflow, freezing the entire case. Randomly. Not always. Not in a reproducible pattern.
+We were deploying a multi-agent AI system for an enterprise HR use case. The individual agents performed well in isolation. Once we wired them together under an orchestrator, things got unpredictable. The orchestrator would forget decisions made by upstream agents mid-workflow, freezing the entire case. Randomly. Not always. Not in a reproducible pattern. In enterprise HR that matters more than in most domains. A frozen escalation, an onboarding flow that loses context on an accommodations request, a leave approval that resumes with no memory of what was already decided: these are not reliability statistics. They're employee experiences.
 
 That randomness is the real enemy in agentic systems. Deterministic bugs are straightforward to fix. Random failures at the orchestration layer are a different class of problem.
 
@@ -43,7 +43,8 @@ The reason it works: LLM-based orchestrators are heavily prompt-dependent. How y
 
 The reason it is not enough: you are asking a probabilistic model to behave deterministically. On most runs it will. On some runs it will not. At scale, "some runs" is a lot of cases.
 
-The durable fix is architectural: decisions should be persisted to an external state store rather than living in the orchestrator's context window. The orchestrator reads from that store rather than trying to recall from memory.
+The durable fix is architectural: decisions should be persisted to an external state store rather than living in the orchestrator's context window. The orchestrator reads from that store rather than trying to recall from memory. 
+Here's the thing about why prompt engineering fails over time. LLMs have a fixed token budget per call. Long workflows fill it fast: conversation history, retrieved documents, tool outputs, decisions from upstream agents. When it fills, the model doesn't error. It quietly drops older content with no warning, and the dropped content is usually the earliest decisions in the chain, which are often the most consequential ones. Prompts can slow this down. They can't fix a container with a hard limit.
 
 ---
 
@@ -57,9 +58,9 @@ In our deployment, two failure categories emerged:
 
 Both failures shared the same signature: they happened some of the time, not all of the time, with no clear trigger. That randomness is the diagnostic signal. It points to:
 
-- Context window pressure (long workflows exceeding the token limit quietly, causing unpredictable drops)
-- Asynchronous timing (agent responses arriving slightly out of sequence)
-- Session context inheritance (the orchestrator picking up the triggering user's session instead of the designated AI user)
+- Context window pressure. The workflow has been running long enough that the token budget is full. Earlier decisions get truncated. The orchestrator routes the next step as if those decisions never happened. On short workflows this never shows up. On anything involving 8 or more handoffs, document retrieval, or long conversation history, expect it eventually. The tricky part: it's silent. No error, no log entry, just a wrong decision downstream.
+- Async timing. Two agents fire close together. Both write to the orchestrator's context. One response lands first and gets acted on. By the time the second arrives, the workflow has already branched. The second response updates context that no longer applies. This is especially likely when agents are calling external tools with variable latency. The outputs can both be correct and still produce an inconsistent state.
+- Session context inheritance. The orchestrator picks up the triggering user's session metadata instead of the AI execution context. The agent reasons correctly and produces the right output. But the platform writes that action under the wrong actor. The result looks like a data integrity issue, not an agent failure, which is why it tends to get misdiagnosed and escalated to the wrong team.
 
 When you see random failures in agentic workflows, start by ruling out these three before debugging agent logic.
 
@@ -83,7 +84,7 @@ The field has converged on a few things worth knowing:
 
 **Context engineering has displaced prompt engineering as the primary discipline.** The recognition is that most agent failures are context failures, not model failures. The model reasons fine. It just did not have the right information at the right moment.
 
-**Strictly typed handoffs are now considered table stakes.** If Agent A passes a decision to Agent B, that handoff should use a rigid schema, not natural language summarized in a prompt. Validation logic should reject improperly formatted state at each transition.
+**Strictly typed handoffs are now considered table stakes.** If Agent A passes a decision to Agent B, that handoff should use a rigid schema, not natural language summarized in a prompt. Validation logic should reject improperly formatted state at each transition. The difference is concrete. A natural language handoff looks like: "The previous agent determined this case is high priority and should be escalated." A typed handoff looks like {"case_id": "INC0042", "priority": "high", "escalation_required": true, "deciding_agent": "triage_v2"}. With the first version, the receiving agent has to interpret and infer structure. New failure point introduced. With the second, if a required field is missing or malformed, the handoff fails visibly before the next agent acts on bad data. Invisible failures become explicit ones. That's the whole value.
 
 **External state stores are the architectural answer.** Frameworks like LangGraph externalize state to a persistent object that all agents read from and write to. The orchestrator does not need to remember because state lives outside the model entirely.
 
@@ -96,6 +97,14 @@ The field has converged on a few things worth knowing:
 The major enterprise AI platforms are aware of this problem and actively investing in architectural solutions. The common direction: move from in-context orchestration memory to platform-managed state, where the database or a dedicated memory layer holds decisions between agent steps.
 
 The practical implication for PMs: ask your platform vendor specifically how state is persisted between agent handoffs. "The orchestrator manages it" is not an answer. You want to know whether decisions are written to a structured store between steps, or whether the orchestrator is relying on its token window to carry context forward. Those are very different reliability profiles.
+
+The approval gap problem is the one I see least discussed.
+
+Most writing on state persistence focuses on failures within a single session: context dropping mid workflow, agents losing track of what happened two steps ago. The harder version happens across time.
+
+An HRSD workflow starts Monday. An agent collects employee data, reads a policy, drafts a recommendation, and queues a manager approval. The manager approves Thursday. The workflow resumes. But with what context? If state was held in the orchestrator's session memory, it's gone. If it was persisted to an external store, it's recoverable. That difference is the difference between a workflow that resumes coherently and one that restarts from scratch with no memory of what happened Monday.
+
+For HR specifically, multi day workflows are not edge cases. Onboarding, leave approvals, escalation chains: all of them sit in queues. When you're evaluating a platform, ask one specific question: where is workflow state stored between the time an agent acts and the time a human approves? "In the session" or "in the model" are not acceptable answers.
 
 ---
 
