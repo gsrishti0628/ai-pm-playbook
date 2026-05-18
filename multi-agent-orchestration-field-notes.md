@@ -135,6 +135,9 @@ I'll keep adding to this as deployments progress. Areas I'm actively tracking:
 
 I'm a product manager working on enterprise AI adoption. This repo is a personal learning log, not affiliated with any employer. Feedback welcome via issues or PRs.
 
----
+## Great Reads**
+Well written article on designing for Agent Memory in 2026. Can see these complexities in real world enterprise ecosystems: https://thenuancedperspective.substack.com/p/designing-agentic-memory-in-2026?utm_source=substack&publication_id=3612144&post_id=197597409&utm_medium=email&utm_content=share&utm_campaign=email-share&triggerShare=true&isFreemail=true&r=3h3699&triedRedirect=true 
+
+**---
 
 *Last updated: April 2026*
